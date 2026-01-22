@@ -30,31 +30,74 @@ import { addDays, format } from 'date-fns'
 
 const categories = ['all', 'Camera', 'Lens', 'Audio', 'Lighting', 'Grip', 'Other']
 
+type Classroom = {
+  id: string
+  name: string
+}
+
+type EquipmentItem = EquipmentWithStatus & {
+  ownerClassroom?: Classroom | null
+  ownerClassroomId?: string | null
+}
+
 export default function BrowsePage() {
-  const [equipment, setEquipment] = useState<EquipmentWithStatus[]>([])
+  const [equipment, setEquipment] = useState<EquipmentItem[]>([])
+  const [classrooms, setClassrooms] = useState<Classroom[]>([])
+  const [selectedClassroom, setSelectedClassroom] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
-  const [selectedEquipment, setSelectedEquipment] = useState<EquipmentWithStatus | null>(null)
+  const [selectedEquipment, setSelectedEquipment] = useState<EquipmentItem | null>(null)
   const [checkoutDialogOpen, setCheckoutDialogOpen] = useState(false)
   const [dueDate, setDueDate] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
-    fetchEquipment()
-  }, [category])
+    fetchClassrooms()
+  }, [])
+
+  useEffect(() => {
+    if (selectedClassroom) {
+      fetchEquipment()
+    }
+  }, [category, selectedClassroom])
+
+  async function fetchClassrooms() {
+    try {
+      const res = await fetch('/api/classrooms')
+      if (res.ok) {
+        const data = await res.json()
+        setClassrooms(data)
+        // Auto-select first classroom if available
+        if (data.length > 0) {
+          setSelectedClassroom(data[0].id)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching classrooms:', error)
+    }
+  }
 
   async function fetchEquipment() {
+    if (!selectedClassroom) return
+
+    setLoading(true)
     try {
       const params = new URLSearchParams()
+      params.set('classroomId', selectedClassroom)
       if (category !== 'all') params.set('category', category)
       if (search) params.set('search', search)
 
       const res = await fetch(`/api/equipment?${params}`)
       if (res.ok) {
         const data = await res.json()
-        setEquipment(data)
+        // API returns { owned, borrowed, availableShared } for classroom-scoped queries
+        const allEquipment = [
+          ...(data.owned || []),
+          ...(data.borrowed || []),
+        ]
+        setEquipment(allEquipment)
       }
     } catch (error) {
       console.error('Error fetching equipment:', error)
@@ -63,14 +106,14 @@ export default function BrowsePage() {
     }
   }
 
-  function handleCheckoutClick(item: EquipmentWithStatus) {
+  function handleCheckoutClick(item: EquipmentItem) {
     setSelectedEquipment(item)
     setDueDate(format(addDays(new Date(), item.maxCheckoutDays), 'yyyy-MM-dd'))
     setCheckoutDialogOpen(true)
   }
 
   async function handleCheckout() {
-    if (!selectedEquipment) return
+    if (!selectedEquipment || !selectedClassroom) return
 
     setSubmitting(true)
     try {
@@ -79,6 +122,7 @@ export default function BrowsePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           equipmentId: selectedEquipment.id,
+          classroomId: selectedClassroom,
           dueDate,
         }),
       })
@@ -124,31 +168,54 @@ export default function BrowsePage() {
         <p className="text-muted-foreground">Find and checkout equipment for your projects</p>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search equipment..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
+      {/* Classroom Selector */}
+      {classrooms.length === 0 ? (
+        <div className="text-center py-12 bg-muted/50 rounded-lg">
+          <Package className="mx-auto h-12 w-12 text-muted-foreground" />
+          <h3 className="mt-2 text-sm font-semibold">No classrooms available</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Join a classroom to browse and checkout equipment
+          </p>
         </div>
-        <Select value={category} onValueChange={setCategory}>
-          <SelectTrigger className="w-full sm:w-48">
-            <Filter className="mr-2 h-4 w-4" />
-            <SelectValue placeholder="Category" />
-          </SelectTrigger>
-          <SelectContent>
-            {categories.map((cat) => (
-              <SelectItem key={cat} value={cat}>
-                {cat === 'all' ? 'All Categories' : cat}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      ) : (
+        <>
+          {/* Filters */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            <Select value={selectedClassroom} onValueChange={setSelectedClassroom}>
+              <SelectTrigger className="w-full sm:w-64">
+                <SelectValue placeholder="Select Classroom" />
+              </SelectTrigger>
+              <SelectContent>
+                {classrooms.map((classroom) => (
+                  <SelectItem key={classroom.id} value={classroom.id}>
+                    {classroom.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search equipment..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger className="w-full sm:w-48">
+                <Filter className="mr-2 h-4 w-4" />
+                <SelectValue placeholder="Category" />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((cat) => (
+                  <SelectItem key={cat} value={cat}>
+                    {cat === 'all' ? 'All Categories' : cat}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
       {/* Equipment Grid */}
       {loading ? (
@@ -270,6 +337,8 @@ export default function BrowsePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        </>
+      )}
     </div>
   )
 }
