@@ -15,7 +15,7 @@ const updateClassroomSchema = z.object({
 // GET /api/classrooms/[id] - Get classroom details
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -23,7 +23,7 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
@@ -75,7 +75,7 @@ export async function GET(
 // PATCH /api/classrooms/[id] - Update classroom
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -83,7 +83,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
@@ -131,7 +131,7 @@ export async function PATCH(
 // Query params: permanent=true for hard delete (SUPER_ADMIN only, must be archived)
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -139,7 +139,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const { searchParams } = new URL(request.url)
     const permanent = searchParams.get('permanent') === 'true'
 

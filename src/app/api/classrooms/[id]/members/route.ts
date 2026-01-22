@@ -20,7 +20,7 @@ const updateMemberSchema = z.object({
 // GET /api/classrooms/[id]/members - List classroom members
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -28,7 +28,7 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context || !canViewClassroom(context.userRole, session.user.role)) {
@@ -102,7 +102,7 @@ export async function GET(
 // POST /api/classrooms/[id]/members - Add a member by email
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -110,7 +110,7 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
@@ -191,7 +191,7 @@ export async function POST(
 // PATCH /api/classrooms/[id]/members - Update a member's role
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -199,7 +199,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
@@ -262,7 +262,7 @@ export async function PATCH(
 // DELETE /api/classrooms/[id]/members?userId=xxx - Remove a member
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -270,7 +270,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = params
+    const { id } = await params
     const { searchParams } = new URL(request.url)
     const userId = searchParams.get('userId')
 
