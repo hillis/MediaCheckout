@@ -16,7 +16,7 @@ const addToClassroomSchema = z.object({
 // PATCH /api/equipment/[id]/share - Toggle equipment sharing
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -24,7 +24,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = await params
+    const { id } = params
 
     // Find the primary classroom for this equipment
     const equipmentClassroom = await prisma.classroomEquipment.findFirst({
@@ -90,7 +90,7 @@ export async function PATCH(
 // POST /api/equipment/[id]/share - Add shared equipment to a classroom
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -98,7 +98,7 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = await params
+    const { id } = params
     const body = await request.json()
     const { classroomId } = addToClassroomSchema.parse(body)
 
@@ -177,7 +177,7 @@ export async function POST(
 // DELETE /api/equipment/[id]/share?classroomId=xxx - Remove shared equipment from a classroom
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     const session = await getServerSession(authOptions)
@@ -185,7 +185,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id } = await params
+    const { id } = params
     const { searchParams } = new URL(request.url)
     const classroomId = searchParams.get('classroomId')
 

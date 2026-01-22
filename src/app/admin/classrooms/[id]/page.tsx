@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, use } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -51,8 +51,8 @@ type Classroom = {
   }
 }
 
-export default function ClassroomDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
+export default function ClassroomDetailPage({ params }: { params: { id: string } }) {
+  const { id } = params
   const router = useRouter()
   const [classroom, setClassroom] = useState<Classroom | null>(null)
   const [members, setMembers] = useState<Member[]>([])
