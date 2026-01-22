@@ -164,10 +164,21 @@ export default function AdminUsersPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold">{user.name || 'Unknown'}</h3>
-                      {user.role === 'ADMIN' && (
+                      {user.role === 'SUPER_ADMIN' && (
                         <Badge className="bg-purple-100 text-purple-800">
                           <Shield className="mr-1 h-3 w-3" />
-                          Admin
+                          Super Admin
+                        </Badge>
+                      )}
+                      {user.role === 'TEACHER_ADMIN' && (
+                        <Badge className="bg-blue-100 text-blue-800">
+                          <Shield className="mr-1 h-3 w-3" />
+                          Teacher Admin
+                        </Badge>
+                      )}
+                      {user.role === 'TEACHER' && (
+                        <Badge className="bg-green-100 text-green-800">
+                          Teacher
                         </Badge>
                       )}
                     </div>
@@ -228,7 +239,9 @@ export default function AdminUsersPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="STUDENT">Student</SelectItem>
-                  <SelectItem value="ADMIN">Admin</SelectItem>
+                  <SelectItem value="TEACHER">Teacher</SelectItem>
+                  <SelectItem value="TEACHER_ADMIN">Teacher Admin</SelectItem>
+                  <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { differenceInDays } from 'date-fns'
+import { hasSystemAdminRole } from '@/lib/permissions'
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     // Non-admins can only view their own checkouts
-    if (session.user.role !== 'ADMIN' && checkout.userId !== session.user.id) {
+    if (!hasSystemAdminRole(session.user.role) && checkout.userId !== session.user.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -59,7 +60,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     // Non-admins can only return their own checkouts
-    if (session.user.role !== 'ADMIN' && checkout.userId !== session.user.id) {
+    if (!hasSystemAdminRole(session.user.role) && checkout.userId !== session.user.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 

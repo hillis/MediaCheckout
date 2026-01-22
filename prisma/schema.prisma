@@ -3,14 +3,23 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("POSTGRES_PRISMA_URL")
-  directUrl = env("POSTGRES_URL_NON_POOLING")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
+// System-level roles
 enum Role {
-  STUDENT
-  ADMIN
+  SUPER_ADMIN   // System-wide admin, manages all classrooms
+  TEACHER_ADMIN // Teacher who can admin other assigned classrooms
+  TEACHER       // Creates/owns classrooms, manages own inventory
+  STUDENT       // Joins classrooms, checks out equipment
+}
+
+// Roles within a specific classroom
+enum ClassroomRole {
+  ADMIN   // Full admin for this classroom
+  TEACHER // Can manage equipment and checkouts
+  STUDENT // Can browse and checkout
 }
 
 enum EquipmentStatus {
@@ -61,20 +70,23 @@ model Session {
 }
 
 model User {
-  id            String        @id @default(cuid())
+  id            String   @id @default(cuid())
   name          String?
-  email         String?       @unique
+  email         String?  @unique
   emailVerified DateTime?
   image         String?
-  password      String?       // For local admin authentication
-  role          Role          @default(STUDENT)
-  totalLateFees Float         @default(0)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  accounts      Account[]
-  sessions      Session[]
-  checkouts     Checkout[]
-  reservations  Reservation[]
+  password      String?  // For local admin authentication
+  role          Role     @default(STUDENT)
+  totalLateFees Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts         Account[]
+  sessions         Session[]
+  checkouts        Checkout[]
+  reservations     Reservation[]
+  ownedClassrooms  Classroom[]       @relation("ClassroomOwner")
+  classroomMembers ClassroomMember[]
 }
 
 model VerificationToken {
@@ -83,6 +95,62 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// Classroom (tenant) model
+model Classroom {
+  id                String    @id @default(cuid())
+  name              String
+  description       String?
+  joinCode          String    @unique // 6-char alphanumeric code
+  joinCodeExpiresAt DateTime? // Optional expiration
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  ownerId String
+  owner   User   @relation("ClassroomOwner", fields: [ownerId], references: [id])
+
+  members      ClassroomMember[]
+  equipment    ClassroomEquipment[]
+  checkouts    Checkout[]
+  reservations Reservation[]
+  settings     ClassroomSettings[]
+
+  @@index([joinCode])
+  @@index([ownerId])
+}
+
+// User membership in a classroom
+model ClassroomMember {
+  id          String        @id @default(cuid())
+  classroomId String
+  userId      String
+  role        ClassroomRole @default(STUDENT)
+  joinedAt    DateTime      @default(now())
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, userId])
+  @@index([classroomId])
+  @@index([userId])
+}
+
+// Equipment-Classroom relationship (for multi-classroom equipment sharing)
+model ClassroomEquipment {
+  id          String   @id @default(cuid())
+  classroomId String
+  equipmentId String
+  isPrimary   Boolean  @default(true) // true = owner, false = shared access
+  addedAt     DateTime @default(now())
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, equipmentId])
+  @@index([classroomId])
+  @@index([equipmentId])
 }
 
 model Equipment {
@@ -95,16 +163,20 @@ model Equipment {
   status          EquipmentStatus @default(AVAILABLE)
   dailyLateFee    Float           @default(5.0)
   maxCheckoutDays Int             @default(7)
+  isShared        Boolean         @default(false) // Can be seen/borrowed by other classrooms
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
-  checkouts       Checkout[]
-  reservations    Reservation[]
+
+  checkouts    Checkout[]
+  reservations Reservation[]
+  classrooms   ClassroomEquipment[]
 }
 
 model Checkout {
   id            String         @id @default(cuid())
   equipmentId   String
   userId        String
+  classroomId   String         // Track which classroom context
   checkoutDate  DateTime       @default(now())
   dueDate       DateTime
   returnDate    DateTime?
@@ -113,11 +185,14 @@ model Checkout {
   notes         String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
-  equipment     Equipment      @relation(fields: [equipmentId], references: [id])
-  user          User           @relation(fields: [userId], references: [id])
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+  classroom Classroom @relation(fields: [classroomId], references: [id])
 
   @@index([equipmentId])
   @@index([userId])
+  @@index([classroomId])
   @@index([status])
 }
 
@@ -125,6 +200,7 @@ model Reservation {
   id          String            @id @default(cuid())
   equipmentId String
   userId      String
+  classroomId String            // Track which classroom context
   pickupDate  DateTime
   pickupTime  String
   returnDate  DateTime
@@ -132,16 +208,32 @@ model Reservation {
   notes       String?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
-  equipment   Equipment         @relation(fields: [equipmentId], references: [id])
-  user        User              @relation(fields: [userId], references: [id])
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+  classroom Classroom @relation(fields: [classroomId], references: [id])
 
   @@index([equipmentId])
   @@index([userId])
+  @@index([classroomId])
   @@index([status])
 }
 
+// Global system settings
 model Settings {
   id    String @id @default(cuid())
   key   String @unique
   value String
+}
+
+// Per-classroom settings
+model ClassroomSettings {
+  id          String @id @default(cuid())
+  classroomId String
+  key         String
+  value       String
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, key])
 }

@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
+import { userHasEquipmentAccess } from '@/lib/classroom-context'
+import { canManageEquipment, canManageAllClassrooms } from '@/lib/permissions'
 
 const updateEquipmentSchema = z.object({
   equipmentId: z.string().min(1).optional(),
@@ -13,6 +15,7 @@ const updateEquipmentSchema = z.object({
   status: z.enum(['AVAILABLE', 'CHECKED_OUT', 'RESERVED', 'MAINTENANCE']).optional(),
   dailyLateFee: z.number().min(0).optional(),
   maxCheckoutDays: z.number().min(1).optional(),
+  isShared: z.boolean().optional(),
 })
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -24,17 +27,34 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     const { id } = await params
 
+    // Check if user has access to this equipment
+    const access = await userHasEquipmentAccess(session.user.id, id, session.user.role)
+    if (!access.hasAccess) {
+      return NextResponse.json({ error: 'Equipment not found or access denied' }, { status: 404 })
+    }
+
     const equipment = await prisma.equipment.findUnique({
       where: { id },
       include: {
         checkouts: {
           where: { status: 'ACTIVE' },
-          include: { user: { select: { name: true, email: true } } },
+          include: {
+            user: { select: { name: true, email: true } },
+            classroom: { select: { id: true, name: true } },
+          },
         },
         reservations: {
           where: { status: 'PENDING' },
-          include: { user: { select: { name: true, email: true } } },
+          include: {
+            user: { select: { name: true, email: true } },
+            classroom: { select: { id: true, name: true } },
+          },
           orderBy: { pickupDate: 'asc' },
+        },
+        classrooms: {
+          include: {
+            classroom: { select: { id: true, name: true } },
+          },
         },
       },
     })
@@ -43,7 +63,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return NextResponse.json({ error: 'Equipment not found' }, { status: 404 })
     }
 
-    return NextResponse.json(equipment)
+    // Find the primary (owner) classroom
+    const primaryClassroom = equipment.classrooms.find((c) => c.isPrimary)
+
+    return NextResponse.json({
+      ...equipment,
+      ownerClassroomId: primaryClassroom?.classroomId,
+      ownerClassroomName: primaryClassroom?.classroom.name,
+    })
   } catch (error) {
     console.error('Error fetching equipment:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -53,11 +80,44 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session || session.user.role !== 'ADMIN') {
+    if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { id } = await params
+
+    // Find the primary classroom for this equipment
+    const equipmentClassroom = await prisma.classroomEquipment.findFirst({
+      where: { equipmentId: id, isPrimary: true },
+      include: {
+        classroom: true,
+      },
+    })
+
+    if (!equipmentClassroom) {
+      return NextResponse.json({ error: 'Equipment not found' }, { status: 404 })
+    }
+
+    // Check if user can manage equipment in the owner classroom
+    const isOwner = equipmentClassroom.classroom.ownerId === session.user.id
+    const membership = await prisma.classroomMember.findUnique({
+      where: {
+        classroomId_userId: {
+          classroomId: equipmentClassroom.classroomId,
+          userId: session.user.id,
+        },
+      },
+    })
+
+    const classroomRole = membership?.role || (isOwner ? 'ADMIN' : null)
+    if (!classroomRole && !canManageAllClassrooms(session.user.role)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+
+    if (classroomRole && !canManageEquipment(classroomRole, session.user.role)) {
+      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+    }
+
     const body = await request.json()
     const validatedData = updateEquipmentSchema.parse(body)
 
@@ -82,11 +142,43 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session || session.user.role !== 'ADMIN') {
+    if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { id } = await params
+
+    // Find the primary classroom for this equipment
+    const equipmentClassroom = await prisma.classroomEquipment.findFirst({
+      where: { equipmentId: id, isPrimary: true },
+      include: {
+        classroom: true,
+      },
+    })
+
+    if (!equipmentClassroom) {
+      return NextResponse.json({ error: 'Equipment not found' }, { status: 404 })
+    }
+
+    // Check if user can manage equipment in the owner classroom
+    const isOwner = equipmentClassroom.classroom.ownerId === session.user.id
+    const membership = await prisma.classroomMember.findUnique({
+      where: {
+        classroomId_userId: {
+          classroomId: equipmentClassroom.classroomId,
+          userId: session.user.id,
+        },
+      },
+    })
+
+    const classroomRole = membership?.role || (isOwner ? 'ADMIN' : null)
+    if (!classroomRole && !canManageAllClassrooms(session.user.role)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+
+    if (classroomRole && !canManageEquipment(classroomRole, session.user.role)) {
+      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+    }
 
     // Check for active checkouts
     const activeCheckouts = await prisma.checkout.count({
@@ -100,7 +192,11 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       )
     }
 
-    await prisma.equipment.delete({ where: { id } })
+    // Delete equipment and all classroom links
+    await prisma.$transaction([
+      prisma.classroomEquipment.deleteMany({ where: { equipmentId: id } }),
+      prisma.equipment.delete({ where: { id } }),
+    ])
 
     return NextResponse.json({ success: true })
   } catch (error) {

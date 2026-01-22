@@ -4,8 +4,9 @@ import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
-import { Menu, X, Package, CalendarDays, RotateCcw, LayoutDashboard, Settings, Users } from 'lucide-react'
+import { Menu, X, Package, CalendarDays, RotateCcw, LayoutDashboard, Settings, Users, School } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   DropdownMenu,
@@ -27,6 +28,7 @@ const studentNavItems = [
 const adminNavItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/equipment', label: 'Equipment', icon: Package },
+  { href: '/admin/classrooms', label: 'Classrooms', icon: School },
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ]
@@ -36,7 +38,9 @@ export function Navbar() {
   const pathname = usePathname()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
-  const isAdmin = session?.user?.role === 'ADMIN'
+  const isAdmin = session?.user?.role === 'SUPER_ADMIN' ||
+    session?.user?.role === 'TEACHER_ADMIN' ||
+    session?.user?.role === 'TEACHER'
   const isAdminRoute = pathname?.startsWith('/admin')
   const navItems = isAdminRoute ? adminNavItems : studentNavItems
 
@@ -82,6 +86,8 @@ export function Navbar() {
                 </Button>
               </Link>
             )}
+
+            <ThemeToggle />
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

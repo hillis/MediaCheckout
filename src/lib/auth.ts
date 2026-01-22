@@ -37,7 +37,8 @@ export const authOptions: NextAuthOptions = {
           throw new Error('This account does not have password login enabled')
         }
 
-        if (user.role !== 'ADMIN') {
+        // Allow password login for super admins and teacher admins
+        if (user.role !== 'SUPER_ADMIN' && user.role !== 'TEACHER_ADMIN') {
           throw new Error('Only admin accounts can use password login')
         }
 

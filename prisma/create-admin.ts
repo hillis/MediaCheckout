@@ -26,13 +26,13 @@ async function createAdmin() {
       where: { email },
       update: {
         password: hashedPassword,
-        role: 'ADMIN',
+        role: 'SUPER_ADMIN',
         name,
       },
       create: {
         email,
         password: hashedPassword,
-        role: 'ADMIN',
+        role: 'SUPER_ADMIN',
         name,
       },
     })

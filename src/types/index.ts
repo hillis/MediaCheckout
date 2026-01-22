@@ -1,4 +1,4 @@
-import { Role } from '@prisma/client'
+import { Role, ClassroomRole, Classroom, ClassroomMember } from '@prisma/client'
 import 'next-auth'
 
 declare module 'next-auth' {
@@ -14,6 +14,44 @@ declare module 'next-auth' {
   }
 }
 
+// Classroom with the user's role in that classroom
+export type ClassroomWithRole = Classroom & {
+  memberRole: ClassroomRole
+  isOwner: boolean
+  _count?: {
+    members: number
+    equipment: number
+  }
+}
+
+// Classroom member with user details
+export type ClassroomMemberWithUser = ClassroomMember & {
+  user: {
+    id: string
+    name: string | null
+    email: string | null
+    image: string | null
+    role: Role
+  }
+}
+
+// For the classroom selector dropdown
+export type ClassroomOption = {
+  id: string
+  name: string
+  role: ClassroomRole
+  isOwner: boolean
+}
+
+// Classroom context for API operations
+export type ClassroomContext = {
+  classroomId: string
+  userId: string
+  userRole: ClassroomRole
+  isOwner: boolean
+  isSuperAdmin: boolean
+}
+
 export type EquipmentWithStatus = {
   id: string
   equipmentId: string
@@ -24,14 +62,19 @@ export type EquipmentWithStatus = {
   status: 'AVAILABLE' | 'CHECKED_OUT' | 'RESERVED' | 'MAINTENANCE'
   dailyLateFee: number
   maxCheckoutDays: number
+  isShared: boolean
   createdAt: Date
   updatedAt: Date
+  // For multi-classroom context
+  isPrimary?: boolean // true if this classroom owns the equipment
+  ownerClassroomId?: string
 }
 
 export type CheckoutWithDetails = {
   id: string
   equipmentId: string
   userId: string
+  classroomId: string
   checkoutDate: Date
   dueDate: Date
   returnDate: Date | null
@@ -52,12 +95,17 @@ export type CheckoutWithDetails = {
     email: string | null
     image: string | null
   }
+  classroom?: {
+    id: string
+    name: string
+  }
 }
 
 export type ReservationWithDetails = {
   id: string
   equipmentId: string
   userId: string
+  classroomId: string
   pickupDate: Date
   pickupTime: string
   returnDate: Date
@@ -75,6 +123,10 @@ export type ReservationWithDetails = {
     name: string | null
     email: string | null
     image: string | null
+  }
+  classroom?: {
+    id: string
+    name: string
   }
 }
 
