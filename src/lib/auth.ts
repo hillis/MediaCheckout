@@ -5,6 +5,7 @@ import { PrismaAdapter } from '@auth/prisma-adapter'
 import { prisma } from './prisma'
 import { Adapter } from 'next-auth/adapters'
 import bcrypt from 'bcryptjs'
+import { assignUserToDefaultClassroom } from './default-classroom'
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as Adapter,
@@ -65,10 +66,12 @@ export const authOptions: NextAuthOptions = {
         return true
       }
 
-      // For Google login, optionally restrict to specific email domain
-      const allowedDomain = process.env.ALLOWED_EMAIL_DOMAIN
-      if (allowedDomain && user.email) {
-        return user.email.endsWith(`@${allowedDomain}`)
+      // For Google login, restrict to allowed email domains
+      const allowedDomains = process.env.ALLOWED_EMAIL_DOMAINS
+      if (allowedDomains && user.email) {
+        const domains = allowedDomains.split(',').map(d => d.trim().toLowerCase())
+        const userDomain = user.email.split('@')[1]?.toLowerCase()
+        return domains.includes(userDomain)
       }
       return true
     },
@@ -97,6 +100,14 @@ export const authOptions: NextAuthOptions = {
         token.sub = user.id
       }
       return token
+    },
+  },
+  events: {
+    async createUser({ user }) {
+      // Auto-assign new users to default classroom
+      if (user.id) {
+        await assignUserToDefaultClassroom(user.id)
+      }
     },
   },
   pages: {

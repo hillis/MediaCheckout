@@ -12,17 +12,34 @@ const createClassroomSchema = z.object({
 })
 
 // GET /api/classrooms - List classrooms (super admin sees all, others see their own)
-export async function GET() {
+// Query params: status=active|archived|all (default: active)
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const { searchParams } = new URL(request.url)
+    const status = searchParams.get('status') || 'active'
+
+    // Determine isActive filter based on status
+    const getIsActiveFilter = () => {
+      switch (status) {
+        case 'archived':
+          return { isActive: false }
+        case 'all':
+          return {} // no filter
+        default:
+          return { isActive: true }
+      }
+    }
+    const isActiveFilter = getIsActiveFilter()
+
     // Super admins can see all classrooms
     if (canManageAllClassrooms(session.user.role)) {
       const classrooms = await prisma.classroom.findMany({
-        where: { isActive: true },
+        where: isActiveFilter,
         include: {
           owner: {
             select: {
@@ -51,7 +68,7 @@ export async function GET() {
     const ownedClassrooms = await prisma.classroom.findMany({
       where: {
         ownerId: userId,
-        isActive: true,
+        ...isActiveFilter,
       },
       include: {
         owner: {
@@ -75,7 +92,7 @@ export async function GET() {
       where: {
         userId,
         classroom: {
-          isActive: true,
+          ...isActiveFilter,
           ownerId: { not: userId },
         },
       },

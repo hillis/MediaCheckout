@@ -1,17 +1,25 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Save, Settings } from 'lucide-react'
+import { Save, Settings, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 
 type SettingsData = {
   defaultCheckoutDays: string
   defaultLateFee: string
   reminderDaysBefore: string
+  defaultClassroomId: string
+}
+
+type Classroom = {
+  id: string
+  name: string
+  owner: { name: string | null }
 }
 
 export default function AdminSettingsPage() {
@@ -19,13 +27,16 @@ export default function AdminSettingsPage() {
     defaultCheckoutDays: '7',
     defaultLateFee: '5.00',
     reminderDaysBefore: '1',
+    defaultClassroomId: '',
   })
+  const [classrooms, setClassrooms] = useState<Classroom[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
     fetchSettings()
+    fetchClassrooms()
   }, [])
 
   async function fetchSettings() {
@@ -37,12 +48,25 @@ export default function AdminSettingsPage() {
           defaultCheckoutDays: data.defaultCheckoutDays || '7',
           defaultLateFee: data.defaultLateFee || '5.00',
           reminderDaysBefore: data.reminderDaysBefore || '1',
+          defaultClassroomId: data.defaultClassroomId || '',
         })
       }
     } catch (error) {
       console.error('Error fetching settings:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function fetchClassrooms() {
+    try {
+      const res = await fetch('/api/classrooms')
+      if (res.ok) {
+        const data = await res.json()
+        setClassrooms(data)
+      }
+    } catch (error) {
+      console.error('Error fetching classrooms:', error)
     }
   }
 
@@ -149,6 +173,44 @@ export default function AdminSettingsPage() {
                 Send reminder email this many days before due date
               </p>
             </div>
+          </div>
+          <Button onClick={handleSave} disabled={saving}>
+            <Save className="mr-2 h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Settings'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" />
+            New User Settings
+          </CardTitle>
+          <CardDescription>Configure defaults for new users signing in</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="defaultClassroom">Default Classroom for New Users</Label>
+            <Select
+              value={settings.defaultClassroomId}
+              onValueChange={(value) => setSettings({ ...settings, defaultClassroomId: value })}
+            >
+              <SelectTrigger id="defaultClassroom">
+                <SelectValue placeholder="No default classroom" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">None (users join manually)</SelectItem>
+                {classrooms.map((classroom) => (
+                  <SelectItem key={classroom.id} value={classroom.id}>
+                    {classroom.name} {classroom.owner?.name ? `(${classroom.owner.name})` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              New users from allowed domains will automatically be added to this classroom as students
+            </p>
           </div>
           <Button onClick={handleSave} disabled={saving}>
             <Save className="mr-2 h-4 w-4" />

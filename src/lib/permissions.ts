@@ -129,6 +129,11 @@ export function canViewClassroom(
   return classroomRole !== null
 }
 
+// Check if user can permanently delete a classroom (SUPER_ADMIN only)
+export function canPermanentlyDeleteClassroom(systemRole: Role): boolean {
+  return systemRole === 'SUPER_ADMIN'
+}
+
 // Get effective permission level for a user in a classroom
 export type PermissionLevel = 'none' | 'student' | 'teacher' | 'admin' | 'super_admin'
 

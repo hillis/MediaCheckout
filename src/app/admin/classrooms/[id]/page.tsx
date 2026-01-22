@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -14,7 +15,26 @@ import {
   Trash2,
   UserPlus,
   Crown,
+  MoreVertical,
+  Archive,
+  ArchiveRestore,
+  AlertTriangle,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 
 type Member = {
   id: string
@@ -54,6 +74,7 @@ type Classroom = {
 export default function ClassroomDetailPage({ params }: { params: { id: string } }) {
   const { id } = params
   const router = useRouter()
+  const { data: session } = useSession()
   const [classroom, setClassroom] = useState<Classroom | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -63,6 +84,11 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
   const [newMemberEmail, setNewMemberEmail] = useState('')
   const [newMemberRole, setNewMemberRole] = useState<'STUDENT' | 'TEACHER' | 'ADMIN'>('STUDENT')
   const [addMemberError, setAddMemberError] = useState('')
+  const [archiveDialog, setArchiveDialog] = useState(false)
+  const [deleteDialog, setDeleteDialog] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const isSuperAdmin = session?.user.role === 'SUPER_ADMIN'
 
   useEffect(() => {
     fetchClassroom()
@@ -179,6 +205,61 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
     }
   }
 
+  const handleArchive = async () => {
+    setIsProcessing(true)
+    try {
+      const res = await fetch(`/api/classrooms/${id}`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        setClassroom((prev) => (prev ? { ...prev, isActive: false } : null))
+        setArchiveDialog(false)
+      }
+    } catch (error) {
+      console.error('Error archiving classroom:', error)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleRestore = async () => {
+    setIsProcessing(true)
+    try {
+      const res = await fetch(`/api/classrooms/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: true }),
+      })
+      if (res.ok) {
+        setClassroom((prev) => (prev ? { ...prev, isActive: true } : null))
+      }
+    } catch (error) {
+      console.error('Error restoring classroom:', error)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handlePermanentDelete = async () => {
+    setIsProcessing(true)
+    try {
+      const res = await fetch(`/api/classrooms/${id}?permanent=true`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        router.push('/admin/classrooms')
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to delete classroom')
+      }
+    } catch (error) {
+      console.error('Error deleting classroom:', error)
+    } finally {
+      setIsProcessing(false)
+      setDeleteDialog(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -199,6 +280,8 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
   }
 
   const canManage = classroom.isOwner || classroom.memberRole === 'ADMIN'
+  const canArchiveOrDelete = classroom.isOwner || isSuperAdmin
+  const isArchived = !classroom.isActive
 
   return (
     <div className="space-y-6">
@@ -210,15 +293,45 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
         Back to Classrooms
       </Link>
 
+      {/* Archived Banner */}
+      {isArchived && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="font-medium text-amber-800">This classroom is archived</p>
+            <p className="text-sm text-amber-700">
+              Students cannot join this classroom. Restore it to make it active again.
+            </p>
+          </div>
+          {canArchiveOrDelete && (
+            <button
+              onClick={handleRestore}
+              disabled={isProcessing}
+              className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              <ArchiveRestore className="h-4 w-4" />
+              {isProcessing ? 'Restoring...' : 'Restore'}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 ${isArchived ? 'opacity-75' : ''}`}>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-4">
-            <div className="bg-blue-50 rounded-lg p-3">
-              <School className="h-8 w-8 text-blue-600" />
+            <div className={`rounded-lg p-3 ${isArchived ? 'bg-gray-100' : 'bg-blue-50'}`}>
+              <School className={`h-8 w-8 ${isArchived ? 'text-gray-500' : 'text-blue-600'}`} />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{classroom.name}</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-900">{classroom.name}</h1>
+                {isArchived && (
+                  <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 text-gray-600 rounded">
+                    Archived
+                  </span>
+                )}
+              </div>
               {classroom.description && (
                 <p className="text-gray-600 mt-1">{classroom.description}</p>
               )}
@@ -227,6 +340,49 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
               </p>
             </div>
           </div>
+
+          {canArchiveOrDelete && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg">
+                  <MoreVertical className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {isArchived ? (
+                  <>
+                    <DropdownMenuItem
+                      onClick={handleRestore}
+                      className="flex items-center gap-2"
+                    >
+                      <ArchiveRestore className="h-4 w-4" />
+                      Restore Classroom
+                    </DropdownMenuItem>
+                    {isSuperAdmin && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={() => setDeleteDialog(true)}
+                          className="flex items-center gap-2 text-red-600 focus:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete Permanently
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <DropdownMenuItem
+                    onClick={() => setArchiveDialog(true)}
+                    className="flex items-center gap-2"
+                  >
+                    <Archive className="h-4 w-4" />
+                    Archive Classroom
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
@@ -252,7 +408,7 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
       </div>
 
       {/* Join Code */}
-      {canManage && classroom.joinCode && (
+      {canManage && classroom.joinCode && !isArchived && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Join Code</h2>
           <div className="flex items-center gap-4">
@@ -288,10 +444,10 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
       )}
 
       {/* Members */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 ${isArchived ? 'opacity-75' : ''}`}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Members</h2>
-          {canManage && (
+          {canManage && !isArchived && (
             <button
               onClick={() => setShowAddMember(!showAddMember)}
               className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -367,7 +523,7 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
               </div>
 
               <div className="flex items-center gap-2">
-                {canManage && !member.isOwner ? (
+                {canManage && !member.isOwner && !isArchived ? (
                   <>
                     <select
                       value={member.role}
@@ -396,6 +552,74 @@ export default function ClassroomDetailPage({ params }: { params: { id: string }
           ))}
         </div>
       </div>
+
+      {/* Archive Confirmation Dialog */}
+      <Dialog open={archiveDialog} onOpenChange={setArchiveDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Archive Classroom</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to archive &quot;{classroom.name}&quot;? Students will no longer
+              be able to join this classroom.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              onClick={() => setArchiveDialog(false)}
+              className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleArchive}
+              disabled={isProcessing}
+              className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+            >
+              {isProcessing ? 'Archiving...' : 'Archive'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Permanent Delete Confirmation Dialog */}
+      <Dialog open={deleteDialog} onOpenChange={setDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Permanently Delete Classroom</DialogTitle>
+            <DialogDescription className="space-y-2">
+              <p>
+                Are you sure you want to permanently delete &quot;{classroom.name}&quot;? This
+                action cannot be undone.
+              </p>
+              <p className="font-medium text-red-600">The following will be removed:</p>
+              <ul className="list-disc list-inside text-sm text-gray-600">
+                <li>{classroom._count.members} member connections</li>
+                <li>{classroom._count.equipment} equipment links</li>
+                <li>All classroom settings</li>
+                <li>Pending reservations will be cancelled</li>
+              </ul>
+              <p className="text-sm text-gray-500">
+                Note: Equipment items will not be deleted, only unlinked from this classroom.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              onClick={() => setDeleteDialog(false)}
+              className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handlePermanentDelete}
+              disabled={isProcessing}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+            >
+              {isProcessing ? 'Deleting...' : 'Delete Permanently'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
