@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { getClassroomContext } from '@/lib/classroom-context'
 import { canManageMembers, canViewClassroom } from '@/lib/permissions'
-import { ClassroomRole } from '@prisma/client'
+import { ClassroomRole } from '@/types'
 import {
   handleApiError,
   successResponse,

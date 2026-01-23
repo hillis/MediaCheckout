@@ -1,5 +1,29 @@
-import { Role, ClassroomRole, Classroom, ClassroomMember } from '@prisma/client'
 import 'next-auth'
+
+/**
+ * System-level roles (matches Prisma enum)
+ */
+export type Role = 'SUPER_ADMIN' | 'TEACHER_ADMIN' | 'TEACHER' | 'STUDENT'
+
+/**
+ * Classroom-level roles (matches Prisma enum)
+ */
+export type ClassroomRole = 'ADMIN' | 'TEACHER' | 'STUDENT'
+
+/**
+ * Equipment status (matches Prisma enum)
+ */
+export type EquipmentStatus = 'AVAILABLE' | 'CHECKED_OUT' | 'RESERVED' | 'MAINTENANCE'
+
+/**
+ * Checkout status (matches Prisma enum)
+ */
+export type CheckoutStatus = 'ACTIVE' | 'RETURNED' | 'OVERDUE'
+
+/**
+ * Reservation status (matches Prisma enum)
+ */
+export type ReservationStatus = 'PENDING' | 'CONVERTED' | 'CANCELLED' | 'EXPIRED'
 
 declare module 'next-auth' {
   interface Session {
@@ -12,6 +36,32 @@ declare module 'next-auth' {
       totalLateFees: number
     }
   }
+}
+
+/**
+ * Base classroom type
+ */
+export type Classroom = {
+  id: string
+  name: string
+  description: string | null
+  joinCode: string
+  joinCodeExpiresAt: Date | null
+  isActive: boolean
+  createdAt: Date
+  updatedAt: Date
+  ownerId: string
+}
+
+/**
+ * Base classroom member type
+ */
+export type ClassroomMember = {
+  id: string
+  classroomId: string
+  userId: string
+  role: ClassroomRole
+  joinedAt: Date
 }
 
 // Classroom with the user's role in that classroom
@@ -59,7 +109,7 @@ export type EquipmentWithStatus = {
   category: string
   description: string | null
   photoUrl: string | null
-  status: 'AVAILABLE' | 'CHECKED_OUT' | 'RESERVED' | 'MAINTENANCE'
+  status: EquipmentStatus
   dailyLateFee: number
   maxCheckoutDays: number
   isShared: boolean
@@ -79,7 +129,7 @@ export type CheckoutWithDetails = {
   dueDate: Date
   returnDate: Date | null
   lateFeeAmount: number
-  status: 'ACTIVE' | 'RETURNED' | 'OVERDUE'
+  status: CheckoutStatus
   notes: string | null
   equipment: {
     id: string
@@ -109,7 +159,7 @@ export type ReservationWithDetails = {
   pickupDate: Date
   pickupTime: string
   returnDate: Date
-  status: 'PENDING' | 'CONVERTED' | 'CANCELLED' | 'EXPIRED'
+  status: ReservationStatus
   notes: string | null
   equipment: {
     id: string

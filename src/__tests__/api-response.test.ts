@@ -243,12 +243,12 @@ describe('API Response Utilities', () => {
 
   describe('isApiError', () => {
     it('returns true for error response', () => {
-      const response = { success: false, error: { code: 'NOT_FOUND', message: 'Not found' } }
+      const response = { success: false as const, error: { code: 'NOT_FOUND' as const, message: 'Not found' } }
       expect(isApiError(response)).toBe(true)
     })
 
     it('returns false for success response', () => {
-      const response = { success: true, data: { id: 1 } }
+      const response = { success: true as const, data: { id: 1 } }
       expect(isApiError(response)).toBe(false)
     })
   })

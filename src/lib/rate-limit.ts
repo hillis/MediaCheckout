@@ -28,11 +28,11 @@ function cleanupExpiredEntries(): void {
   }
 
   lastCleanup = now
-  for (const [key, entry] of rateLimitStore.entries()) {
+  rateLimitStore.forEach((entry, key) => {
     if (entry.resetTime < now) {
       rateLimitStore.delete(key)
     }
-  }
+  })
 }
 
 /**

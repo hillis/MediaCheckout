@@ -1,5 +1,10 @@
 import { NextRequest } from 'next/server'
-import { Prisma } from '@prisma/client'
+
+/**
+ * Generic where clause type for Prisma queries.
+ * Using Record type to avoid dependency on generated Prisma client during type checking.
+ */
+type WhereClause = Record<string, unknown>
 
 /**
  * Equipment filter parameters extracted from request
@@ -35,11 +40,9 @@ export function parseEquipmentFilters(request: NextRequest): EquipmentFilterPara
  * @param filters - Filter parameters
  * @returns Prisma where clause object
  */
-export function buildEquipmentWhereClause(
-  filters: EquipmentFilterParams
-): Prisma.EquipmentWhereInput {
-  const where: Prisma.EquipmentWhereInput = {}
-  const conditions: Prisma.EquipmentWhereInput[] = []
+export function buildEquipmentWhereClause(filters: EquipmentFilterParams): WhereClause {
+  const where: WhereClause = {}
+  const conditions: WhereClause[] = []
 
   // Category filter
   if (filters.category && filters.category !== 'all') {
@@ -48,7 +51,7 @@ export function buildEquipmentWhereClause(
 
   // Status filter
   if (filters.status && filters.status !== 'all') {
-    conditions.push({ status: filters.status as Prisma.EnumEquipmentStatusFilter })
+    conditions.push({ status: filters.status })
   }
 
   // Search filter (name, equipmentId, description)
@@ -76,17 +79,15 @@ export function buildEquipmentWhereClause(
  * @param filters - Filter parameters
  * @returns Array of filter conditions
  */
-export function buildEquipmentFilterConditions(
-  filters: EquipmentFilterParams
-): Prisma.EquipmentWhereInput[] {
-  const conditions: Prisma.EquipmentWhereInput[] = []
+export function buildEquipmentFilterConditions(filters: EquipmentFilterParams): WhereClause[] {
+  const conditions: WhereClause[] = []
 
   if (filters.category && filters.category !== 'all') {
     conditions.push({ category: filters.category })
   }
 
   if (filters.status && filters.status !== 'all') {
-    conditions.push({ status: filters.status as Prisma.EnumEquipmentStatusFilter })
+    conditions.push({ status: filters.status })
   }
 
   if (filters.search) {
@@ -174,13 +175,13 @@ export function parseUserFilters(request: NextRequest): UserFilterParams {
  * @param filters - Filter parameters
  * @returns Prisma where clause object
  */
-export function buildUserWhereClause(filters: UserFilterParams): Prisma.UserWhereInput {
-  const where: Prisma.UserWhereInput = {}
-  const conditions: Prisma.UserWhereInput[] = []
+export function buildUserWhereClause(filters: UserFilterParams): WhereClause {
+  const where: WhereClause = {}
+  const conditions: WhereClause[] = []
 
   // Role filter
   if (filters.role && filters.role !== 'all') {
-    conditions.push({ role: filters.role as Prisma.EnumRoleFilter })
+    conditions.push({ role: filters.role })
   }
 
   // Search filter (name, email)
@@ -233,13 +234,11 @@ export function parseCheckoutFilters(request: NextRequest): CheckoutFilterParams
  * @param filters - Filter parameters
  * @returns Prisma where clause object
  */
-export function buildCheckoutWhereClause(
-  filters: CheckoutFilterParams
-): Prisma.CheckoutWhereInput {
-  const where: Prisma.CheckoutWhereInput = {}
+export function buildCheckoutWhereClause(filters: CheckoutFilterParams): WhereClause {
+  const where: WhereClause = {}
 
   if (filters.status && filters.status !== 'all') {
-    where.status = filters.status as Prisma.EnumCheckoutStatusFilter
+    where.status = filters.status
   }
 
   if (filters.userId) {
@@ -287,10 +286,8 @@ export function parseClassroomFilters(request: NextRequest): ClassroomFilterPara
  * @param filters - Filter parameters
  * @returns Prisma where clause object
  */
-export function buildClassroomWhereClause(
-  filters: ClassroomFilterParams
-): Prisma.ClassroomWhereInput {
-  const where: Prisma.ClassroomWhereInput = {}
+export function buildClassroomWhereClause(filters: ClassroomFilterParams): WhereClause {
+  const where: WhereClause = {}
 
   if (filters.isActive !== undefined) {
     where.isActive = filters.isActive

@@ -1,6 +1,5 @@
 import { prisma } from './prisma'
-import { Role, ClassroomRole } from '@prisma/client'
-import { ClassroomContext, ClassroomWithRole } from '@/types'
+import { Role, ClassroomRole, ClassroomContext, ClassroomWithRole } from '@/types'
 import { isSuperAdmin } from './permissions'
 
 // Get the user's role in a specific classroom

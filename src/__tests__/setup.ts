@@ -3,7 +3,8 @@
  */
 
 // Set test environment variables
-process.env.NODE_ENV = 'test'
+// Using Object.defineProperty to work around TypeScript's read-only constraint
+Object.defineProperty(process.env, 'NODE_ENV', { value: 'test', writable: true })
 process.env.NEXTAUTH_SECRET = 'test-secret-for-jest'
 process.env.NEXTAUTH_URL = 'http://localhost:3000'
 

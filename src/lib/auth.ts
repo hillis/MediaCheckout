@@ -6,7 +6,7 @@ import { prisma } from './prisma'
 import { Adapter } from 'next-auth/adapters'
 import bcrypt from 'bcryptjs'
 import { assignUserToDefaultClassroom } from './default-classroom'
-import { Role } from '@prisma/client'
+import { Role } from '@/types'
 
 // Token refresh interval in seconds (5 minutes)
 const TOKEN_REFRESH_INTERVAL = 5 * 60

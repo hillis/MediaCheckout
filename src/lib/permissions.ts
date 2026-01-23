@@ -1,4 +1,4 @@
-import { Role, ClassroomRole } from '@prisma/client'
+import { Role, ClassroomRole } from '@/types'
 
 // System-level role checks
 export function isSuperAdmin(role: Role): boolean {
