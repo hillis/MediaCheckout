@@ -1,38 +1,58 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { NextRequest } from 'next/server'
 import { z } from 'zod'
+import { prisma } from '@/lib/prisma'
 import { getClassroomContext } from '@/lib/classroom-context'
 import { canManageMembers, canViewClassroom } from '@/lib/permissions'
 import { ClassroomRole } from '@prisma/client'
+import {
+  handleApiError,
+  successResponse,
+  NotFoundError,
+  ForbiddenError,
+  BadRequestError,
+  ConflictError,
+} from '@/lib/api-response'
+import { requireAuth } from '@/lib/api-middleware'
+import { rateLimit, RateLimitConfigs } from '@/lib/rate-limit'
+import { AuditLog } from '@/lib/audit-log'
 
+/**
+ * Schema for adding a member to a classroom
+ */
 const addMemberSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email('Invalid email address'),
   role: z.enum(['ADMIN', 'TEACHER', 'STUDENT']).default('STUDENT'),
 })
 
+/**
+ * Schema for updating a member's role
+ */
 const updateMemberSchema = z.object({
-  userId: z.string(),
+  userId: z.string().min(1, 'User ID is required'),
   role: z.enum(['ADMIN', 'TEACHER', 'STUDENT']),
 })
 
-// GET /api/classrooms/[id]/members - List classroom members
+/**
+ * GET /api/classrooms/[id]/members
+ *
+ * List all members of a classroom, including the owner.
+ *
+ * @param params.id - Classroom ID
+ * @returns Array of classroom members with user details
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.standard, session.user.id)
 
     const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context || !canViewClassroom(context.userRole, session.user.role)) {
-      return NextResponse.json({ error: 'Classroom not found or access denied' }, { status: 404 })
+      throw new NotFoundError('Classroom not found or access denied')
     }
 
     // Get classroom with owner
@@ -52,7 +72,7 @@ export async function GET(
     })
 
     if (!classroom) {
-      return NextResponse.json({ error: 'Classroom not found' }, { status: 404 })
+      throw new NotFoundError('Classroom not found')
     }
 
     // Get all members
@@ -78,7 +98,7 @@ export async function GET(
     // Include owner in the response if they're not already a member
     const ownerIsMember = members.some((m) => m.userId === classroom.ownerId)
     const allMembers = ownerIsMember
-      ? members
+      ? members.map((m) => ({ ...m, isOwner: m.userId === classroom.ownerId }))
       : [
           {
             id: 'owner',
@@ -92,33 +112,37 @@ export async function GET(
           ...members.map((m) => ({ ...m, isOwner: false })),
         ]
 
-    return NextResponse.json(allMembers)
+    return successResponse(allMembers)
   } catch (error) {
-    console.error('Error fetching members:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'fetching members')
   }
 }
 
-// POST /api/classrooms/[id]/members - Add a member by email
+/**
+ * POST /api/classrooms/[id]/members
+ *
+ * Add a new member to a classroom by email.
+ *
+ * @param params.id - Classroom ID
+ * @returns Created membership with user details
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.strict, session.user.id)
 
     const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
-      return NextResponse.json({ error: 'Classroom not found or access denied' }, { status: 404 })
+      throw new NotFoundError('Classroom not found or access denied')
     }
 
     if (!canManageMembers(context.userRole, session.user.role, context.isOwner)) {
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+      throw new ForbiddenError('Permission denied to manage members')
     }
 
     const body = await request.json()
@@ -131,7 +155,7 @@ export async function POST(
     })
 
     if (!user) {
-      return NextResponse.json({ error: 'User not found with that email' }, { status: 404 })
+      throw new NotFoundError('User not found with that email')
     }
 
     // Check if already a member
@@ -145,7 +169,7 @@ export async function POST(
     })
 
     if (existingMember) {
-      return NextResponse.json({ error: 'User is already a member' }, { status: 400 })
+      throw new ConflictError('User is already a member of this classroom')
     }
 
     // Check if user is the owner
@@ -155,7 +179,7 @@ export async function POST(
     })
 
     if (classroom?.ownerId === user.id) {
-      return NextResponse.json({ error: 'User is the owner of this classroom' }, { status: 400 })
+      throw new BadRequestError('User is the owner of this classroom')
     }
 
     // Create membership
@@ -178,36 +202,40 @@ export async function POST(
       },
     })
 
-    return NextResponse.json(member, { status: 201 })
+    // Audit log
+    await AuditLog.memberAdded(session.user.id, user.id, id, { email, role })
+
+    return successResponse(member, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 })
-    }
-    console.error('Error adding member:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'adding member')
   }
 }
 
-// PATCH /api/classrooms/[id]/members - Update a member's role
+/**
+ * PATCH /api/classrooms/[id]/members
+ *
+ * Update a member's role in the classroom.
+ *
+ * @param params.id - Classroom ID
+ * @returns Updated membership with user details
+ */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.strict, session.user.id)
 
     const { id } = await params
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
-      return NextResponse.json({ error: 'Classroom not found or access denied' }, { status: 404 })
+      throw new NotFoundError('Classroom not found or access denied')
     }
 
     if (!canManageMembers(context.userRole, session.user.role, context.isOwner)) {
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+      throw new ForbiddenError('Permission denied to manage members')
     }
 
     const body = await request.json()
@@ -215,7 +243,7 @@ export async function PATCH(
 
     // Can't update own role (unless super admin)
     if (userId === session.user.id && !context.isSuperAdmin) {
-      return NextResponse.json({ error: 'Cannot update your own role' }, { status: 400 })
+      throw new BadRequestError('Cannot update your own role')
     }
 
     // Check if user is the owner
@@ -225,8 +253,14 @@ export async function PATCH(
     })
 
     if (classroom?.ownerId === userId) {
-      return NextResponse.json({ error: 'Cannot change the owner\'s role' }, { status: 400 })
+      throw new BadRequestError("Cannot change the owner's role")
     }
+
+    // Get current role for audit
+    const currentMember = await prisma.classroomMember.findUnique({
+      where: { classroomId_userId: { classroomId: id, userId } },
+      select: { role: true },
+    })
 
     const member = await prisma.classroomMember.update({
       where: {
@@ -249,45 +283,56 @@ export async function PATCH(
       },
     })
 
-    return NextResponse.json(member)
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 })
+    // Audit log
+    if (currentMember?.role !== role) {
+      await AuditLog.memberRoleChanged(session.user.id, userId, id, {
+        fromRole: currentMember?.role || 'UNKNOWN',
+        toRole: role,
+      })
     }
-    console.error('Error updating member:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+
+    return successResponse(member)
+  } catch (error) {
+    return handleApiError(error, 'updating member')
   }
 }
 
-// DELETE /api/classrooms/[id]/members?userId=xxx - Remove a member
+/**
+ * DELETE /api/classrooms/[id]/members?userId=xxx
+ *
+ * Remove a member from the classroom.
+ * Users can remove themselves, admins can remove others.
+ *
+ * @param params.id - Classroom ID
+ * @param searchParams.userId - User ID to remove
+ * @returns Success confirmation
+ */
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.strict, session.user.id)
 
     const { id } = await params
     const { searchParams } = new URL(request.url)
     const userId = searchParams.get('userId')
 
     if (!userId) {
-      return NextResponse.json({ error: 'userId is required' }, { status: 400 })
+      throw new BadRequestError('userId parameter is required')
     }
 
     const context = await getClassroomContext(session.user.id, session.user.role, id)
 
     if (!context) {
-      return NextResponse.json({ error: 'Classroom not found or access denied' }, { status: 404 })
+      throw new NotFoundError('Classroom not found or access denied')
     }
 
     // Users can remove themselves, or admins can remove others
     const isSelf = userId === session.user.id
     if (!isSelf && !canManageMembers(context.userRole, session.user.role, context.isOwner)) {
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+      throw new ForbiddenError('Permission denied to remove members')
     }
 
     // Can't remove the owner
@@ -297,8 +342,14 @@ export async function DELETE(
     })
 
     if (classroom?.ownerId === userId) {
-      return NextResponse.json({ error: 'Cannot remove the classroom owner' }, { status: 400 })
+      throw new BadRequestError('Cannot remove the classroom owner')
     }
+
+    // Get member info for audit before deletion
+    const memberToRemove = await prisma.classroomMember.findUnique({
+      where: { classroomId_userId: { classroomId: id, userId } },
+      include: { user: { select: { email: true } } },
+    })
 
     await prisma.classroomMember.delete({
       where: {
@@ -309,9 +360,13 @@ export async function DELETE(
       },
     })
 
-    return NextResponse.json({ success: true })
+    // Audit log
+    await AuditLog.memberRemoved(session.user.id, userId, id, {
+      email: memberToRemove?.user.email || 'Unknown',
+    })
+
+    return successResponse({ success: true })
   } catch (error) {
-    console.error('Error removing member:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'removing member')
   }
 }

@@ -1,103 +1,130 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { NextRequest } from 'next/server'
 import { z } from 'zod'
+import { prisma } from '@/lib/prisma'
 import { getClassroomContext } from '@/lib/classroom-context'
 import { canManageEquipment, canManageAllClassrooms } from '@/lib/permissions'
+import {
+  handleApiError,
+  successResponse,
+  BadRequestError,
+  ForbiddenError,
+  ConflictError,
+} from '@/lib/api-response'
+import {
+  requireAuth,
+  parsePaginationParams,
+  paginatedResponse,
+} from '@/lib/api-middleware'
+import {
+  parseEquipmentFilters,
+  buildEquipmentWhereClause,
+  matchesEquipmentFilters,
+} from '@/lib/query-helpers'
+import { rateLimit, RateLimitConfigs } from '@/lib/rate-limit'
+import { AuditLog } from '@/lib/audit-log'
 
+/**
+ * Zod schema for equipment creation
+ */
 const equipmentSchema = z.object({
-  equipmentId: z.string().min(1),
-  name: z.string().min(1),
-  category: z.string().min(1),
+  equipmentId: z.string().min(1, 'Equipment ID is required'),
+  name: z.string().min(1, 'Name is required'),
+  category: z.string().min(1, 'Category is required'),
   description: z.string().optional(),
-  photoUrl: z.string().url().optional().or(z.literal('')),
-  dailyLateFee: z.number().min(0).default(5),
-  maxCheckoutDays: z.number().min(1).default(7),
+  photoUrl: z.string().url('Invalid photo URL').optional().or(z.literal('')),
+  dailyLateFee: z.number().min(0, 'Daily late fee must be positive').default(5),
+  maxCheckoutDays: z.number().min(1, 'Max checkout days must be at least 1').default(7),
   isShared: z.boolean().default(false),
-  classroomId: z.string().min(1),
+  classroomId: z.string().min(1, 'Classroom ID is required'),
 })
 
+/**
+ * GET /api/equipment
+ *
+ * Fetch equipment list with optional filtering and pagination.
+ *
+ * Query parameters:
+ * - classroomId: Required (except for super admins)
+ * - category: Filter by category
+ * - status: Filter by status
+ * - search: Search in name, equipmentId, description
+ * - page: Page number (default: 1)
+ * - limit: Items per page (default: 50, max: 100)
+ *
+ * @returns Equipment list with pagination info
+ */
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.standard, session.user.id)
 
-    const { searchParams } = new URL(request.url)
-    const category = searchParams.get('category')
-    const status = searchParams.get('status')
-    const search = searchParams.get('search')
-    const classroomId = searchParams.get('classroomId')
+    const filters = parseEquipmentFilters(request)
+    const pagination = parsePaginationParams(request)
 
     // Super admins can see all equipment without classroom filter
-    if (!classroomId && canManageAllClassrooms(session.user.role)) {
-      const where: Record<string, unknown> = {}
-      if (category && category !== 'all') where.category = category
-      if (status && status !== 'all') where.status = status
-      if (search) {
-        where.OR = [
-          { name: { contains: search, mode: 'insensitive' } },
-          { equipmentId: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-        ]
-      }
+    if (!filters.classroomId && canManageAllClassrooms(session.user.role)) {
+      const whereClause = buildEquipmentWhereClause(filters)
 
-      const equipment = await prisma.equipment.findMany({
-        where,
-        include: {
-          classrooms: {
-            where: { isPrimary: true },
-            include: { classroom: { select: { id: true, name: true } } },
+      const [equipment, total] = await Promise.all([
+        prisma.equipment.findMany({
+          where: whereClause,
+          include: {
+            classrooms: {
+              where: { isPrimary: true },
+              include: { classroom: { select: { id: true, name: true } } },
+            },
           },
-        },
-        orderBy: { name: 'asc' },
-      })
+          orderBy: { name: 'asc' },
+          skip: pagination.skip,
+          take: pagination.limit,
+        }),
+        prisma.equipment.count({ where: whereClause }),
+      ])
 
-      return NextResponse.json(
-        equipment.map((e) => ({
-          ...e,
-          ownerClassroom: e.classrooms[0]?.classroom || null,
-        }))
-      )
+      const formattedEquipment = equipment.map((e) => ({
+        ...e,
+        ownerClassroom: e.classrooms[0]?.classroom || null,
+        classrooms: undefined,
+      }))
+
+      return successResponse(paginatedResponse(formattedEquipment, total, pagination))
     }
 
     // Classroom-scoped query
-    if (!classroomId) {
-      return NextResponse.json({ error: 'classroomId is required' }, { status: 400 })
+    if (!filters.classroomId) {
+      throw new BadRequestError('classroomId is required')
     }
 
-    const context = await getClassroomContext(session.user.id, session.user.role, classroomId)
+    const context = await getClassroomContext(
+      session.user.id,
+      session.user.role,
+      filters.classroomId
+    )
+
     if (!context) {
-      return NextResponse.json({ error: 'Classroom not found or access denied' }, { status: 403 })
+      throw new ForbiddenError('Classroom not found or access denied')
     }
 
-    // Build search conditions
-    const searchConditions: Record<string, unknown>[] = []
-    if (category && category !== 'all') searchConditions.push({ category })
-    if (status && status !== 'all') searchConditions.push({ status })
-    if (search) {
-      searchConditions.push({
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { equipmentId: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-        ],
-      })
-    }
+    // Optimized query: Get equipment linked to this classroom with filters pushed to database
+    const whereClause = buildEquipmentWhereClause(filters)
 
-    // Get equipment linked to this classroom (owned or borrowed)
+    // Get owned and borrowed equipment in a single optimized query
     const classroomEquipment = await prisma.classroomEquipment.findMany({
-      where: { classroomId },
+      where: {
+        classroomId: filters.classroomId,
+        equipment: whereClause,
+      },
       include: {
         equipment: true,
       },
+      orderBy: {
+        equipment: { name: 'asc' },
+      },
     })
 
+    // Get shared equipment from other classrooms (available to add)
     const classroomEquipmentIds = classroomEquipment.map((ce) => ce.equipmentId)
 
-    // Get shared equipment from other classrooms
     const sharedEquipment = await prisma.equipment.findMany({
       where: {
         isShared: true,
@@ -105,7 +132,7 @@ export async function GET(request: NextRequest) {
         classrooms: {
           some: { isPrimary: true },
         },
-        ...(searchConditions.length > 0 ? { AND: searchConditions } : {}),
+        ...whereClause,
       },
       include: {
         classrooms: {
@@ -113,52 +140,25 @@ export async function GET(request: NextRequest) {
           include: { classroom: { select: { id: true, name: true } } },
         },
       },
+      orderBy: { name: 'asc' },
     })
 
-    // Combine and format results
+    // Format results - filtering is now done in the query
     const ownedEquipment = classroomEquipment
       .filter((ce) => ce.isPrimary)
       .map((ce) => ({
         ...ce.equipment,
         isPrimary: true,
-        ownerClassroomId: classroomId,
+        ownerClassroomId: filters.classroomId,
       }))
-      .filter((e) => {
-        if (category && category !== 'all' && e.category !== category) return false
-        if (status && status !== 'all' && e.status !== status) return false
-        if (search) {
-          const s = search.toLowerCase()
-          if (
-            !e.name.toLowerCase().includes(s) &&
-            !e.equipmentId.toLowerCase().includes(s) &&
-            !(e.description?.toLowerCase().includes(s))
-          )
-            return false
-        }
-        return true
-      })
 
     const borrowedEquipment = classroomEquipment
       .filter((ce) => !ce.isPrimary)
       .map((ce) => ({
         ...ce.equipment,
         isPrimary: false,
-        ownerClassroomId: null, // Could fetch if needed
+        ownerClassroomId: null,
       }))
-      .filter((e) => {
-        if (category && category !== 'all' && e.category !== category) return false
-        if (status && status !== 'all' && e.status !== status) return false
-        if (search) {
-          const s = search.toLowerCase()
-          if (
-            !e.name.toLowerCase().includes(s) &&
-            !e.equipmentId.toLowerCase().includes(s) &&
-            !(e.description?.toLowerCase().includes(s))
-          )
-            return false
-        }
-        return true
-      })
 
     const availableShared = sharedEquipment.map((e) => ({
       ...e,
@@ -166,25 +166,41 @@ export async function GET(request: NextRequest) {
       isAvailableToAdd: true,
       ownerClassroomId: e.classrooms[0]?.classroomId,
       ownerClassroomName: e.classrooms[0]?.classroom.name,
+      classrooms: undefined,
     }))
 
-    return NextResponse.json({
+    return successResponse({
       owned: ownedEquipment,
       borrowed: borrowedEquipment,
       availableShared,
     })
   } catch (error) {
-    console.error('Error fetching equipment:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'fetching equipment')
   }
 }
 
+/**
+ * POST /api/equipment
+ *
+ * Create new equipment in a classroom.
+ *
+ * Request body:
+ * - equipmentId: Unique barcode/QR code value
+ * - name: Equipment name
+ * - category: Equipment category
+ * - description: Optional description
+ * - photoUrl: Optional photo URL
+ * - dailyLateFee: Late fee per day (default: 5)
+ * - maxCheckoutDays: Maximum checkout duration (default: 7)
+ * - isShared: Whether other classrooms can see this equipment
+ * - classroomId: Target classroom ID
+ *
+ * @returns Created equipment object
+ */
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.strict, session.user.id)
 
     const body = await request.json()
     const validatedData = equipmentSchema.parse(body)
@@ -197,19 +213,20 @@ export async function POST(request: NextRequest) {
     )
 
     if (!context) {
-      return NextResponse.json({ error: 'Classroom not found or access denied' }, { status: 403 })
+      throw new ForbiddenError('Classroom not found or access denied')
     }
 
     if (!canManageEquipment(context.userRole, session.user.role)) {
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+      throw new ForbiddenError('Permission denied to create equipment')
     }
 
+    // Check for duplicate equipment ID
     const existing = await prisma.equipment.findUnique({
       where: { equipmentId: validatedData.equipmentId },
     })
 
     if (existing) {
-      return NextResponse.json({ error: 'Equipment ID already exists' }, { status: 400 })
+      throw new ConflictError('Equipment ID already exists')
     }
 
     // Create equipment and link to classroom in transaction
@@ -239,12 +256,16 @@ export async function POST(request: NextRequest) {
       return newEquipment
     })
 
-    return NextResponse.json(equipment, { status: 201 })
+    // Audit log
+    await AuditLog.equipmentCreated(
+      session.user.id,
+      equipment.id,
+      validatedData.classroomId,
+      { name: equipment.name, category: equipment.category }
+    )
+
+    return successResponse(equipment, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 })
-    }
-    console.error('Error creating equipment:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'creating equipment')
   }
 }

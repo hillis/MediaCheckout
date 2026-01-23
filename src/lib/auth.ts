@@ -6,6 +6,10 @@ import { prisma } from './prisma'
 import { Adapter } from 'next-auth/adapters'
 import bcrypt from 'bcryptjs'
 import { assignUserToDefaultClassroom } from './default-classroom'
+import { Role } from '@prisma/client'
+
+// Token refresh interval in seconds (5 minutes)
+const TOKEN_REFRESH_INTERVAL = 5 * 60
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as Adapter,
@@ -75,30 +79,44 @@ export const authOptions: NextAuthOptions = {
       }
       return true
     },
-    async session({ session, token, user }) {
-      if (session.user) {
-        // For JWT strategy (credentials), use token.sub
-        // For database strategy (Google), use user.id
-        const userId = token?.sub || user?.id
-
-        if (userId) {
-          session.user.id = userId
-          // Fetch user role from database
-          const dbUser = await prisma.user.findUnique({
-            where: { id: userId },
-            select: { role: true, totalLateFees: true },
-          })
-          session.user.role = dbUser?.role || 'STUDENT'
-          session.user.totalLateFees = dbUser?.totalLateFees || 0
-        }
+    async session({ session, token }) {
+      if (session.user && token) {
+        // Use cached data from JWT token instead of hitting database
+        session.user.id = token.sub as string
+        session.user.role = (token.role as Role) || 'STUDENT'
+        session.user.totalLateFees = (token.totalLateFees as number) || 0
       }
       return session
     },
-    async jwt({ token, user }) {
-      // Persist user id to the token on initial sign in
+    async jwt({ token, user, trigger }) {
+      // On initial sign in, fetch and cache user data in token
       if (user) {
         token.sub = user.id
+        const dbUser = await prisma.user.findUnique({
+          where: { id: user.id },
+          select: { role: true, totalLateFees: true },
+        })
+        token.role = dbUser?.role || 'STUDENT'
+        token.totalLateFees = dbUser?.totalLateFees || 0
+        token.lastRefresh = Date.now()
       }
+
+      // Refresh token data periodically (every 5 minutes) or on update trigger
+      const lastRefresh = (token.lastRefresh as number) || 0
+      const shouldRefresh = trigger === 'update' || (Date.now() - lastRefresh > TOKEN_REFRESH_INTERVAL * 1000)
+
+      if (shouldRefresh && token.sub) {
+        const dbUser = await prisma.user.findUnique({
+          where: { id: token.sub },
+          select: { role: true, totalLateFees: true },
+        })
+        if (dbUser) {
+          token.role = dbUser.role
+          token.totalLateFees = dbUser.totalLateFees
+          token.lastRefresh = Date.now()
+        }
+      }
+
       return token
     },
   },

@@ -237,3 +237,22 @@ model ClassroomSettings {
 
   @@unique([classroomId, key])
 }
+
+// Audit log for tracking sensitive operations
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // e.g., EQUIPMENT_DELETED, MEMBER_REMOVED
+  userId      String   // User who performed the action
+  targetType  String   // Type of resource affected (equipment, classroom, user, etc.)
+  targetId    String   // ID of the affected resource
+  classroomId String?  // Optional classroom context
+  details     String?  @db.Text // JSON string with additional details
+  ipAddress   String?  // Client IP address
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([targetType, targetId])
+  @@index([classroomId])
+  @@index([action])
+  @@index([createdAt])
+}

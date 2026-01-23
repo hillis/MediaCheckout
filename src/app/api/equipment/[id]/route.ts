@@ -1,36 +1,57 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { NextRequest } from 'next/server'
 import { z } from 'zod'
+import { prisma } from '@/lib/prisma'
 import { userHasEquipmentAccess } from '@/lib/classroom-context'
-import { canManageEquipment, canManageAllClassrooms } from '@/lib/permissions'
+import {
+  handleApiError,
+  successResponse,
+  NotFoundError,
+  BadRequestError,
+} from '@/lib/api-response'
+import {
+  requireAuth,
+  requireEquipmentManagement,
+} from '@/lib/api-middleware'
+import { rateLimit, RateLimitConfigs } from '@/lib/rate-limit'
+import { AuditLog } from '@/lib/audit-log'
 
+/**
+ * Zod schema for equipment updates
+ */
 const updateEquipmentSchema = z.object({
-  equipmentId: z.string().min(1).optional(),
-  name: z.string().min(1).optional(),
-  category: z.string().min(1).optional(),
+  equipmentId: z.string().min(1, 'Equipment ID is required').optional(),
+  name: z.string().min(1, 'Name is required').optional(),
+  category: z.string().min(1, 'Category is required').optional(),
   description: z.string().optional(),
-  photoUrl: z.string().url().optional().or(z.literal('')),
+  photoUrl: z.string().url('Invalid photo URL').optional().or(z.literal('')),
   status: z.enum(['AVAILABLE', 'CHECKED_OUT', 'RESERVED', 'MAINTENANCE']).optional(),
-  dailyLateFee: z.number().min(0).optional(),
-  maxCheckoutDays: z.number().min(1).optional(),
+  dailyLateFee: z.number().min(0, 'Daily late fee must be positive').optional(),
+  maxCheckoutDays: z.number().min(1, 'Max checkout days must be at least 1').optional(),
   isShared: z.boolean().optional(),
 })
 
-export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * GET /api/equipment/[id]
+ *
+ * Fetch a single equipment item with active checkouts and reservations.
+ *
+ * @param params.id - Equipment ID
+ * @returns Equipment details with relationships
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const session = await requireAuth()
+    rateLimit(request, RateLimitConfigs.standard, session.user.id)
 
     const { id } = await params
 
     // Check if user has access to this equipment
     const access = await userHasEquipmentAccess(session.user.id, id, session.user.role)
     if (!access.hasAccess) {
-      return NextResponse.json({ error: 'Equipment not found or access denied' }, { status: 404 })
+      throw new NotFoundError('Equipment not found or access denied')
     }
 
     const equipment = await prisma.equipment.findUnique({
@@ -60,66 +81,49 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     })
 
     if (!equipment) {
-      return NextResponse.json({ error: 'Equipment not found' }, { status: 404 })
+      throw new NotFoundError('Equipment not found')
     }
 
     // Find the primary (owner) classroom
     const primaryClassroom = equipment.classrooms.find((c) => c.isPrimary)
 
-    return NextResponse.json({
+    return successResponse({
       ...equipment,
       ownerClassroomId: primaryClassroom?.classroomId,
       ownerClassroomName: primaryClassroom?.classroom.name,
     })
   } catch (error) {
-    console.error('Error fetching equipment:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'fetching equipment')
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * PATCH /api/equipment/[id]
+ *
+ * Update equipment details.
+ *
+ * @param params.id - Equipment ID
+ * @returns Updated equipment object
+ */
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
     const { id } = await params
 
-    // Find the primary classroom for this equipment
-    const equipmentClassroom = await prisma.classroomEquipment.findFirst({
-      where: { equipmentId: id, isPrimary: true },
-      include: {
-        classroom: true,
-      },
-    })
-
-    if (!equipmentClassroom) {
-      return NextResponse.json({ error: 'Equipment not found' }, { status: 404 })
-    }
-
-    // Check if user can manage equipment in the owner classroom
-    const isOwner = equipmentClassroom.classroom.ownerId === session.user.id
-    const membership = await prisma.classroomMember.findUnique({
-      where: {
-        classroomId_userId: {
-          classroomId: equipmentClassroom.classroomId,
-          userId: session.user.id,
-        },
-      },
-    })
-
-    const classroomRole = membership?.role || (isOwner ? 'ADMIN' : null)
-    if (!classroomRole && !canManageAllClassrooms(session.user.role)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
-
-    if (classroomRole && !canManageEquipment(classroomRole, session.user.role)) {
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
-    }
+    // Use the new middleware to check permissions
+    const { session, equipment: equipmentContext } = await requireEquipmentManagement(id)
+    rateLimit(request, RateLimitConfigs.strict, session.user.id)
 
     const body = await request.json()
     const validatedData = updateEquipmentSchema.parse(body)
+
+    // Get current equipment for audit logging
+    const currentEquipment = await prisma.equipment.findUnique({
+      where: { id },
+      select: { name: true, category: true, status: true },
+    })
 
     const equipment = await prisma.equipment.update({
       where: { id },
@@ -129,56 +133,55 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       },
     })
 
-    return NextResponse.json(equipment)
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 })
+    // Audit log with change details
+    const changes: Record<string, { from: unknown; to: unknown }> = {}
+    if (validatedData.name && validatedData.name !== currentEquipment?.name) {
+      changes.name = { from: currentEquipment?.name, to: validatedData.name }
     }
-    console.error('Error updating equipment:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    if (validatedData.status && validatedData.status !== currentEquipment?.status) {
+      changes.status = { from: currentEquipment?.status, to: validatedData.status }
+    }
+
+    if (Object.keys(changes).length > 0) {
+      await AuditLog.equipmentUpdated(
+        session.user.id,
+        id,
+        equipmentContext.classroomId,
+        { changes }
+      )
+    }
+
+    return successResponse(equipment)
+  } catch (error) {
+    return handleApiError(error, 'updating equipment')
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * DELETE /api/equipment/[id]
+ *
+ * Delete equipment and all classroom links.
+ * Fails if there are active checkouts.
+ *
+ * @param params.id - Equipment ID
+ * @returns Success confirmation
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
     const { id } = await params
 
-    // Find the primary classroom for this equipment
-    const equipmentClassroom = await prisma.classroomEquipment.findFirst({
-      where: { equipmentId: id, isPrimary: true },
-      include: {
-        classroom: true,
-      },
+    // Use the new middleware to check permissions
+    const { session, equipment: equipmentContext } = await requireEquipmentManagement(id)
+    rateLimit(request, RateLimitConfigs.strict, session.user.id)
+
+    // Get equipment name for audit log before deletion
+    const equipmentToDelete = await prisma.equipment.findUnique({
+      where: { id },
+      select: { name: true },
     })
-
-    if (!equipmentClassroom) {
-      return NextResponse.json({ error: 'Equipment not found' }, { status: 404 })
-    }
-
-    // Check if user can manage equipment in the owner classroom
-    const isOwner = equipmentClassroom.classroom.ownerId === session.user.id
-    const membership = await prisma.classroomMember.findUnique({
-      where: {
-        classroomId_userId: {
-          classroomId: equipmentClassroom.classroomId,
-          userId: session.user.id,
-        },
-      },
-    })
-
-    const classroomRole = membership?.role || (isOwner ? 'ADMIN' : null)
-    if (!classroomRole && !canManageAllClassrooms(session.user.role)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
-
-    if (classroomRole && !canManageEquipment(classroomRole, session.user.role)) {
-      return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
-    }
 
     // Check for active checkouts
     const activeCheckouts = await prisma.checkout.count({
@@ -186,10 +189,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     })
 
     if (activeCheckouts > 0) {
-      return NextResponse.json(
-        { error: 'Cannot delete equipment with active checkouts' },
-        { status: 400 }
-      )
+      throw new BadRequestError('Cannot delete equipment with active checkouts')
     }
 
     // Delete equipment and all classroom links
@@ -198,9 +198,16 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       prisma.equipment.delete({ where: { id } }),
     ])
 
-    return NextResponse.json({ success: true })
+    // Audit log
+    await AuditLog.equipmentDeleted(
+      session.user.id,
+      id,
+      equipmentContext.classroomId,
+      { name: equipmentToDelete?.name || 'Unknown' }
+    )
+
+    return successResponse({ success: true })
   } catch (error) {
-    console.error('Error deleting equipment:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'deleting equipment')
   }
 }
