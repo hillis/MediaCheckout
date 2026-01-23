@@ -193,7 +193,12 @@ export default function ClassroomsPage() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="font-semibold text-gray-900">{classroom.name}</h3>
+              <Link
+                href={`/admin/classrooms/${classroom.id}`}
+                className="font-semibold text-gray-900 hover:text-blue-600 hover:underline"
+              >
+                {classroom.name}
+              </Link>
               {isArchived && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 text-gray-600 rounded">
                   Archived
