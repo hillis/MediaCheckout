@@ -44,6 +44,26 @@ export async function GET(request: NextRequest) {
             reservations: true,
           },
         },
+        classroomMembers: {
+          select: {
+            id: true,
+            role: true,
+            classroom: {
+              select: {
+                id: true,
+                name: true,
+                isActive: true,
+              },
+            },
+          },
+        },
+        ownedClassrooms: {
+          select: {
+            id: true,
+            name: true,
+            isActive: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     })
